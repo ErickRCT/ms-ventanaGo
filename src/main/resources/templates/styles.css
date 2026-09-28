@@ -1,0 +1,101 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+.container {
+    width: 80%;
+    margin: 0 auto;
+    font-family: Arial, sans-serif;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.header .logo img {
+    width: 150px;
+}
+
+.header .title h2 {
+    color: red;
+    font-weight: bold;
+}
+
+.company-info {
+    margin-bottom: 20px;
+}
+
+.company-info h4 {
+    font-weight: bold;
+}
+
+.company-info p {
+    margin-bottom: 5px;
+}
+
+.customer-info, .address-info {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+}
+
+.customer-info .left, .address-info .left {
+    flex: 1;
+}
+
+.customer-info .right, .address-info .right {
+    text-align: right;
+    flex: 1;
+}
+
+.product-table {
+    margin-top: 30px;
+}
+
+.product {
+    display: flex;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 15px;
+}
+
+.product .product-left {
+    flex: 2;
+}
+
+.product .product-center {
+    flex: 1;
+    text-align: center;
+}
+
+.product .product-center img {
+    width: 200px;
+    height: auto;
+}
+
+.product .product-right {
+    flex: 1;
+    text-align: right;
+}
+
+.total {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 40px;
+    border-top: 2px solid #ddd;
+    padding-top: 20px;
+}
+
+.total .total-left, .total .total-right {
+    flex: 1;
+    text-align: right;
+}
+
+.total .total-left {
+    text-align: left;
+}

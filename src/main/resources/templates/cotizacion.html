@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Cotización</title>
+    <style>
+        @page {
+            size: A4; /* O usa letter si prefieres */
+            margin-left: 20px;
+            margin-right: 20px;
+        }
+
+        body{
+            font-family: Comic Sans,'Arial Narrow',serif;
+        }
+    </style>
+</head>
+
+<body>
+<table border="0" width="100%">
+    <tr>
+        <td width="50%"><img src="https://www.diprotec.cl/wp-content/uploads/2025/02/imagen_2025-02-26_131502104.png" height="100" width="200"/></td>
+        <td width="50%" align="center">
+            <h2 style="color:red">COTIZACIÓN</h2>
+            <h2 style="color:red">N° <span th:text="${cotizacion.cotizacionId}"></span></h2>
+        </td>
+    </tr>
+</table>
+
+<table border="0" width="100%">
+    <tr>
+        <td colspan="2"><h4 style="margin-top:0; margin-bottom:0;">VIDRIERIA GLASSMAIPO SPA</h4></td>
+    </tr>
+    <tr>
+        <td colspan="2">
+            <p style="margin-top:0; margin-bottom:0;font-size: 12px"><strong>RUT: 77.453.141-6</strong></p>
+            <p style="margin-top:0; margin-bottom:0;font-size: 12px">Clemente Diaz 523, Buin, XIII Región Metropolitana</p>
+            <p style="margin-top:0;font-size: 12px">Teléfono: 569 9639 8834, Email: sergiorpg@hotmail.com</p>
+        </td>
+    </tr>
+</table>
+
+<table border="0" width="100%" cellspacing="0" cellpadding="0" style="font-size: 14px;" >
+    <tr>
+        <td width="60%"> <p style="font-size: 12px">Cliente: <strong><span th:text="${cotizacion.cliente.nombre}"></span><span th:text="${ '( RUT: ' + cotizacion.cliente.rut + ' ) '}"></span> </strong></p></td>
+        <td width="40%" align="right"><span th:text="${#temporals.format(cotizacion.fecha, 'dd ''de'' MMMM ''de'' yyyy')}"></span></td>
+    </tr>
+    <tr style="background-color: #f6f6f6;">
+        <td style="padding-bottom: 10px;padding-top: 5px;border-top: 2px solid #ccc;font-size: 12px">Dirección: <strong><span th:text="${direccionCliente}"></span></strong></td>
+        <td style="padding-bottom: 10px;padding-top: 5px;border-top: 2px solid #ccc;font-size: 12px">Tel./Email:  <span th:text="${cotizacion.cliente.telefono}"></span> / <span th:text="${cotizacion.cliente.email}"></span></td>
+    </tr>
+</table>
+
+<table border="0" width="100%" cellspacing="10" style="font-size: 14px; margin-top: 30px">
+    <tr th:each="ventana : ${cotizacion.ventanas}">
+        <td width="30%" valign="top">
+            <table cellspacing="0" border="0" style="font-size: 12px;">
+                <tr >
+                    <td style="border-bottom: 1px solid #dad9d9;">Item:</td>
+                    <td style="border-bottom: 1px solid #dad9d9;"><span th:text="${ventana.descripcion}"></span></td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="white-space: nowrap; overflow: hidden;"><strong> <span th:text="${ventana.pauta.nombre}"></span> </strong></td>
+                </tr>
+                <tr>
+                    <td><strong><span th:text="${ventana.pauta.serie.nombre}"></span></strong></td>
+                </tr>
+                <tr>
+                    <td>Ancho:</td>
+                    <td><strong><span th:text="${#numbers.formatInteger(ventana.ancho, 3, 'POINT')}"></span>mm</strong></td>
+                </tr>
+                <tr>
+                    <td>Alto</td>
+                    <td><strong><span th:text="${#numbers.formatInteger(ventana.alto, 3, 'POINT')}"></span>mm</strong></td>
+                </tr>
+                <tr>
+                    <td><strong><span th:text="${ventana.color.nombre}"></span></strong></td>
+                </tr>
+                <tr>
+                    <td><strong><span th:text="${ventana.vidrio.nombre}"></span></strong></td>
+                </tr>
+
+            </table>
+        </td>
+        <td align="center" width="40%"><img src="https://www.diprotec.cl/wp-content/uploads/2025/02/imagen_2025-02-26_141210852.png" width="150" height="150"/></td>
+        <td valign="top" align="center" width="30%">
+            <table border="0" style="font-size: 12px;">
+                <tr>
+                    <td align="right">Carpinteria:</td>
+
+                    <td align="left" style="padding-left: 20px;"><strong><span th:text="${#numbers.formatDecimal((ventana.ancho/1000 * ventana.alto/1000) * ventana.cantidad,1,1) } "></span>m²</strong></td>
+                </tr>
+                <tr>
+                    <td align="right" style="white-space: nowrap; overflow: hidden;">Valor Unitario: </td>
+                    <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(ventana.precioNeto, 3, 'POINT')}"></span></strong></td>
+                </tr>
+                <tr>
+                    <td align="right">Unidades: </td>
+                    <td align="left" style="padding-left: 20px;"><strong><span th:text="${ventana.cantidad}"></span></strong></td>
+                </tr>
+                <tr>
+                    <td align="right">Total Item: </td>
+                    <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(ventana.precioNeto * ventana.cantidad, 3, 'POINT')}"></span></strong></td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+
+<hr style="color: #ccc"/>
+<table border="0" width="100%" style="margin-top:50px; margin-bottom:0;font-size: 12px">
+    <tr>
+        <td align="right" width="83%">Cantidad Unidades: </td>
+        <td align="left" width="17%" style="padding-left: 20px;"><strong>1</strong></td>
+    </tr>
+    <tr>
+        <td align="right">Total M2:</td>
+        <td align="left" style="padding-left: 20px;"><strong><span th:text="${m2Total + 'm2'}"></span></strong></td>
+    </tr>
+    <tr>
+        <td align="right">Neto:</td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.neto, 3, 'POINT')}"></span></strong></td>
+    </tr>
+    <tr>
+        <td align="right">IVA 19%:</td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.neto * 0.1, 3, 'POINT')}"></span></strong></td>
+    </tr>
+    <tr>
+        <td align="right" style="font-size: 16px"><strong>Total:</strong></td>
+        <td align="left" style="padding-left: 20px;font-size: 19px"><strong>$<span th:text="${#numbers.formatInteger(cotizacion.neto * 1.19, 3, 'POINT')}"></span></strong></td>
+    </tr>
+</table>
+</body>
+</html>
