@@ -1,0 +1,5 @@
+target/
+.idea/
+.git/
+*.iml
+src/main/resources/application-local.properties
