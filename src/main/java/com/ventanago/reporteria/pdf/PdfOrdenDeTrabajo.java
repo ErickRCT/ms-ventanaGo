@@ -4,17 +4,15 @@ import com.ventanago.cotizacion.service.CotizacionService;
 import com.ventanago.cotizacion.service.dto.CotizacionDto;
 import com.ventanago.reporteria.util.ReporteriaUtils;
 import com.ventanago.utils.RutUtils;
-import com.itextpdf.html2pdf.HtmlConverter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 import org.xhtmlrenderer.pdf.ITextRenderer;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -32,8 +30,8 @@ public class PdfOrdenDeTrabajo {
         Context context = new Context();
         context.setVariables(dataOrdenDeTrabajoPdf);
         String html = templateEngine.process("orden-de-trabajo",context);
-        HtmlConverter.convertToPdf(new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)), new ByteArrayOutputStream());
-        renderer.setDocumentFromString(html);
+        // Base para resolver imágenes relativas (logo.png) desde resources/templates
+        renderer.setDocumentFromString(html, new ClassPathResource("templates/").getURL().toExternalForm());
         renderer.getSharedContext().setPrint(true);
         renderer.getSharedContext().setInteractive(false);
         renderer.layout();

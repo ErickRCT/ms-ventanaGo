@@ -9,14 +9,13 @@ import com.ventanago.region.service.dto.RegionDto;
 import com.ventanago.reporteria.util.ReporteriaUtils;
 import com.ventanago.utils.RutUtils;
 import com.ventanago.ventana.service.dto.VentanaDto;
-import com.itextpdf.html2pdf.HtmlConverter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 import org.xhtmlrenderer.pdf.ITextRenderer;
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -37,8 +36,8 @@ public class PdfCotizacion {
         Context context = new Context();
         context.setVariables(dataCotizacionPdf);
         String html = templateEngine.process("cotizacion",context);
-        HtmlConverter.convertToPdf(new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)), new ByteArrayOutputStream());
-        renderer.setDocumentFromString(html);
+        // Base para resolver imágenes relativas (logo.png) desde resources/templates
+        renderer.setDocumentFromString(html, new ClassPathResource("templates/").getURL().toExternalForm());
         renderer.getSharedContext().setPrint(true);
         renderer.getSharedContext().setInteractive(false);
         renderer.layout();

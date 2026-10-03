@@ -1,5 +1,6 @@
 package com.ventanago.ventana.service.impl;
 
+import com.ventanago.pauta.service.dto.PautaDto;
 import com.ventanago.ventana.repository.VentanaRepository;
 import com.ventanago.ventana.repository.entity.Ventana;
 import com.ventanago.ventana.service.VentanaService;
@@ -50,6 +51,18 @@ public class VentanaServiceImpl implements VentanaService {
 
     }
 
+    // Calcula el precio neto de la ventana sin guardarla.
+    @Override
+    public VentanaDto cotizarVentana(VentanaDto ventanaDto) {
+        // Es público (lo usa el cliente sin cuenta): datos incompletos son un error del que llama, no del servidor.
+        if (ventanaDto.getPauta() == null || ventanaDto.getColor() == null || ventanaDto.getColor().getValor() == null
+                || ventanaDto.getVidrio() == null || ventanaDto.getAncho() <= 0 || ventanaDto.getAlto() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Faltan la pauta, el color, el vidrio o las medidas.");
+        }
+        calcularValorVentana(ventanaDto);
+        return ventanaDto;
+    }
+
     @Override
     public boolean eliminarVentana(Long id){
         if (ventanaRepository.existsById(id)) {
@@ -65,38 +78,89 @@ public class VentanaServiceImpl implements VentanaService {
     }
 
     private int calculaValorPauta(VentanaDto ventanaDto) {
-
-        Long valorAluminio = ventanaDto.getColor().getValor();
-        double pesoTeoricoCompleto = getPesoTeoricoCompleto(ventanaDto);
-        int valorPerfileria = (int) (pesoTeoricoCompleto * valorAluminio);
-        int valorQuincalleria = ventanaDto.getPauta().getQuincallerias().stream()
-                .mapToInt(obj -> {
-                    if(obj.getQuincalleria().getUnidad().equals("Mt")){
-                       return ((ventanaDto.getAncho() * obj.getVariacionH()) +
-                               (ventanaDto.getAlto() * obj.getVariacionV()))/1000 * obj.getQuincalleria().getValor() ;
-                    }
-                    return obj.getCantidad() * obj.getQuincalleria().getValor();
-                }).sum();
-        int valorVidrio = getValorVidrio(ventanaDto);
-        return valorQuincalleria + valorPerfileria + valorVidrio;
-
+        double valorPerfileria = getPesoTeoricoCompleto(ventanaDto) * ventanaDto.getColor().getValor();
+        double valorQuincalleria = getValorQuincalleria(ventanaDto);
+        double valorVidrio = getValorVidrio(ventanaDto);
+        return (int) Math.round(valorPerfileria + valorQuincalleria + valorVidrio);
     }
 
+    /** Kilos de aluminio: peso teórico (kg por metro de ancho / de alto) por las medidas en metros. */
     private static double getPesoTeoricoCompleto(VentanaDto ventanaDto) {
-        double pesoTeoricoHorizontal = ventanaDto.getAncho() > ventanaDto.getPauta().getHorizontalReforzada() ?
-                ventanaDto.getPauta().getPesoTeoricoHorizontal() : ventanaDto.getPauta().getPesoTeoricoReforzadoHorizontal();
-        double pesoTeoricoVertical = ventanaDto.getAlto() > ventanaDto.getPauta().getVerticalReforzada() ?
-                ventanaDto.getPauta().getPesoTeoricoVertical() : ventanaDto.getPauta().getPesoTeoricoReforzadoVertical();
-        return (pesoTeoricoHorizontal * (ventanaDto.getAncho()/1000.0) ) + (pesoTeoricoVertical * ventanaDto.getAlto()/1000);
+        PautaDto pauta = ventanaDto.getPauta();
+        boolean reforzadaH = Boolean.TRUE.equals(pauta.getIsReforzada()) && ventanaDto.getAncho() >= pauta.getHorizontalReforzada();
+        boolean reforzadaV = Boolean.TRUE.equals(pauta.getIsReforzada()) && ventanaDto.getAlto() >= pauta.getVerticalReforzada();
+
+        double pesoHorizontal = pesoTeorico(pauta, 'H', pauta.getPesoTeoricoHorizontal());
+        double pesoVertical = pesoTeorico(pauta, 'V', pauta.getPesoTeoricoVertical());
+        // Desde las medidas de refuerzo se usa el peso reforzado, si la pauta lo tiene cargado.
+        if (reforzadaH && positivo(pauta.getPesoTeoricoReforzadoHorizontal())) {
+            pesoHorizontal = pauta.getPesoTeoricoReforzadoHorizontal();
+        }
+        if (reforzadaV && positivo(pauta.getPesoTeoricoReforzadoVertical())) {
+            pesoVertical = pauta.getPesoTeoricoReforzadoVertical();
+        }
+        return pesoHorizontal * ventanaDto.getAncho() / 1000.0 + pesoVertical * ventanaDto.getAlto() / 1000.0;
     }
 
-    private static int getValorVidrio(VentanaDto ventanaDto){
-        double anchoVidrio = ventanaDto.getPauta().getVidrios().stream()
-                .mapToDouble(obj -> ((ventanaDto.getAncho() / 2.0) + obj.getVariacionH())).sum();
-        double altoVidrio = ventanaDto.getPauta().getVidrios().stream().mapToDouble(obj ->
-                ((ventanaDto.getAlto()) + obj.getVariacionH())).sum();
-        double valorVidrio = (ventanaDto.getVidrio().getValor() * (anchoVidrio/1000 * altoVidrio/1000));
-        return (int) valorVidrio;
+    /**
+     * Peso teórico cargado en la pauta; si viene en 0 se calcula igual que se cargan a mano:
+     * suma de peso (kg/m) × cantidad de los perfiles de esa orientación.
+     */
+    private static double pesoTeorico(PautaDto pauta, char orientacion, Double pesoCargado) {
+        if (positivo(pesoCargado)) return pesoCargado;
+        if (pauta.getPerfiles() == null) return 0;
+        return pauta.getPerfiles().stream()
+                .filter(p -> Character.toUpperCase(p.getOrientacion()) == orientacion && p.getPerfil() != null)
+                .mapToDouble(p -> pesoPerfil(p.getPerfil().getPeso()) * (p.getCantidad() == null ? 1 : p.getCantidad()))
+                .sum();
+    }
+
+    private static double pesoPerfil(String peso) {
+        if (peso == null || peso.isBlank()) return 0;
+        try {
+            return Double.parseDouble(peso.trim().replace(',', '.'));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static boolean positivo(Double valor) {
+        return valor != null && valor > 0;
+    }
+
+    /** "Mt": metros según variacionH × ancho + variacionV × alto; el resto: valor por pieza × cantidad. */
+    private static double getValorQuincalleria(VentanaDto ventanaDto) {
+        if (ventanaDto.getPauta().getQuincallerias() == null) return 0;
+        return ventanaDto.getPauta().getQuincallerias().stream()
+                .mapToDouble(obj -> {
+                    double valor = obj.getQuincalleria().getValor();
+                    if ("Mt".equalsIgnoreCase(obj.getQuincalleria().getUnidad())) {
+                        double metros = (ventanaDto.getAncho() * obj.getVariacionH() + ventanaDto.getAlto() * obj.getVariacionV()) / 1000.0;
+                        return metros * valor;
+                    }
+                    return obj.getCantidad() * valor;
+                }).sum();
+    }
+
+    /**
+     * Las pautas son correderas de 2 hojas: cada línea de vidrio es un paño por hoja, de
+     * (ancho / 2 - variacionH) × (alto - variacionV), y se multiplica por su cantidad y por las 2 hojas.
+     * Las variaciones son descuentos en mm respecto de la medida de la ventana.
+     */
+    private static double getValorVidrio(VentanaDto ventanaDto) {
+        if (ventanaDto.getPauta().getVidrios() == null) return 0;
+        double metrosCuadrados = ventanaDto.getPauta().getVidrios().stream()
+                .mapToDouble(obj -> {
+                    double ancho = Math.max(0, ventanaDto.getAncho() / 2.0 - valorONulo(obj.getVariacionH())) / 1000.0;
+                    double alto = Math.max(0, ventanaDto.getAlto() - valorONulo(obj.getVariacionV())) / 1000.0;
+                    long cantidad = obj.getCantidad() == null ? 1 : obj.getCantidad();
+                    return ancho * alto * cantidad * 2;
+                }).sum();
+        return metrosCuadrados * ventanaDto.getVidrio().getValor();
+    }
+
+    private static long valorONulo(Long valor) {
+        return valor == null ? 0 : valor;
     }
 
 }

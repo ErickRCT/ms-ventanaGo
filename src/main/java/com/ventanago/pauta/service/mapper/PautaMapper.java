@@ -24,7 +24,7 @@ public interface PautaMapper {
 
     @Mapping(target = "perfiles", ignore = true)
     @Mapping(target = "quincallerias", ignore = true)
-    @Mapping(target = "vidrios ", ignore = true)
+    @Mapping(target = "vidrios", ignore = true)
     Pauta toBasicEmpty(PautaDto pautaDto);
 
     @Mapping(target = "pauta.pautaId", source = "pautaId")

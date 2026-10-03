@@ -30,6 +30,11 @@ public class VentanaController {
         return ResponseEntity.ok(ventanaService.cotizarYGuardarVentana(ventanaDto));
     }
 
+    @PostMapping(value ="/cotizar", consumes = "application/json", produces = "application/json")
+    public ResponseEntity<VentanaDto> cotizarVentana(@RequestBody VentanaDto ventanaDto) {
+        return ResponseEntity.ok(ventanaService.cotizarVentana(ventanaDto));
+    }
+
     @DeleteMapping("/eliminar/{id}")
     public ResponseEntity<Void> eliminarVentana(@PathVariable Long id){
         return ventanaService.eliminarVentana(id) ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();

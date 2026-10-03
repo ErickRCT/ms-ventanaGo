@@ -12,5 +12,7 @@ public interface VentanaService {
 
     VentanaDto cotizarYGuardarVentana(VentanaDto ventanaDto);
 
+    VentanaDto cotizarVentana(VentanaDto ventanaDto);
+
     boolean eliminarVentana(Long id);
 }

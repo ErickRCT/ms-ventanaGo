@@ -19,6 +19,7 @@ public class TipoProducto {
 
     private String descripcion;
 
-    private String tipo_producto;
+    @Column(name = "tipo_producto")
+    private String tipoProducto;
 
 }
