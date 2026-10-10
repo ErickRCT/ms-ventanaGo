@@ -38,6 +38,8 @@ public class SeguridadConfig {
     private static final String[] CATALOGO_PUBLICO = {
             "/serie", "/serie/**", "/pauta", "/pauta/**", "/tipo-pauta", "/tipo-pauta/**",
             "/color", "/color/**", "/vidrio", "/vidrio/**", "/region", "/region/**", "/comuna", "/comuna/**",
+            // Proveedores de cada zona (ficha y valoraciones) y rango de precios: se ven antes de crear la cuenta.
+            "/proveedores", "/proveedores/*", "/precios/referencia",
     };
 
     @Bean
@@ -56,10 +58,15 @@ public class SeguridadConfig {
                         // Carrito y envío de solicitudes: el cliente (y el administrador, que puede entrar a todo).
                         .requestMatchers("/carrito", "/carrito/**").hasAnyRole("CLIENTE", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/solicitudes").hasAnyRole("CLIENTE", "ADMIN")
-                        // Responder: proveedores y administrador.
+                        // Ofertar: proveedores y administrador.
                         .requestMatchers(HttpMethod.POST, "/solicitudes/*/respuesta").hasAnyRole("PROVEEDOR", "ADMIN")
-                        // Listado y avisos: cada rol ve lo suyo (se filtra en el servicio).
-                        .requestMatchers(HttpMethod.GET, "/solicitudes").authenticated()
+                        .requestMatchers("/proveedor/perfil").hasRole("PROVEEDOR")
+                        // Elegir oferta, cancelar y valorar: el cliente dueño (se revisa en el servicio).
+                        .requestMatchers(HttpMethod.POST, "/solicitudes/*/ofertas/*/elegir", "/solicitudes/*/cancelar", "/solicitudes/*/valoracion")
+                        .hasAnyRole("CLIENTE", "ADMIN")
+                        // Listado, fotos, chat y avisos: cada rol ve lo suyo (se filtra en el servicio).
+                        .requestMatchers(HttpMethod.GET, "/solicitudes", "/solicitudes/*/fotos/*").authenticated()
+                        .requestMatchers("/ofertas/*/mensajes").authenticated()
                         .requestMatchers("/avisos", "/avisos/**").authenticated()
                         .anyRequest().hasRole("ADMIN"))
                 .oauth2ResourceServer(o -> o.jwt(jwt -> jwt.jwtAuthenticationConverter(convertidorRoles())));

@@ -4,6 +4,7 @@ import com.ventanago.auth.repository.entity.Cuenta;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.BatchSize;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -11,16 +12,29 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Solicitud de cotización que el cliente envía desde su carrito y que responde un proveedor. */
+/**
+ * Solicitud de cotización que el cliente envía desde su carrito (o describiendo un trabajo sin ventanas).
+ * Llega a los proveedores de su comuna; cada uno puede enviar una oferta y el cliente elige una.
+ */
 @Getter
 @Setter
 @Entity
 @Table(name = "solicitud")
 public class Solicitud {
 
-    public enum Estado { PENDIENTE, ACEPTADA, MODIFICADA, RECHAZADA }
+    /**
+     * PENDIENTE: abierta, recibiendo ofertas. ADJUDICADA: el cliente eligió una oferta. TERMINADA: el cliente valoró
+     * el trabajo. CANCELADA: el cliente la retiró.
+     * ACEPTADA, MODIFICADA y RECHAZADA son del esquema anterior (una sola respuesta por solicitud);
+     * MigracionOfertas las convierte en ofertas al arrancar.
+     */
+    public enum Estado { PENDIENTE, ADJUDICADA, TERMINADA, CANCELADA, ACEPTADA, MODIFICADA, RECHAZADA }
 
-    public enum Servicio { FABRICACION, INSTALACION, FLETE }
+    /** Los cuatro últimos no necesitan ventanas diseñadas: el cliente describe el trabajo. */
+    public enum Servicio { FABRICACION, INSTALACION, FLETE, REPARACION, CAMBIO_VIDRIO, MANTENCION, MEDICION }
+
+    /** Servicios que se pueden pedir sin ventanas en el carrito. */
+    public static final Set<Servicio> SIN_VENTANAS = Set.of(Servicio.REPARACION, Servicio.CAMBIO_VIDRIO, Servicio.MANTENCION, Servicio.MEDICION);
 
     /** Es el "N°" que ven cliente y empresa. */
     @Id
@@ -56,6 +70,21 @@ public class Solicitud {
     @Column(name = "observaciones", length = 2000)
     private String observaciones;
 
+    /** Dónde es el trabajo; decide qué proveedores reciben la solicitud. Null en solicitudes antiguas. */
+    @Column(name = "comuna_id")
+    private Long comunaId;
+
+    /** Proveedores elegidos por el cliente. Vacío: todos los que cubren la comuna y los servicios. */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "solicitud_invitado", joinColumns = @JoinColumn(name = "numero"))
+    @Column(name = "proveedor_id")
+    private Set<Long> invitados = new LinkedHashSet<>();
+
+    @OneToMany(mappedBy = "solicitud")
+    @OrderBy("ofertaId ASC")
+    @BatchSize(size = 50)
+    private List<Oferta> ofertas = new ArrayList<>();
+
     @Enumerated(EnumType.STRING)
     @Column(name = "estado", nullable = false, length = 20)
     private Estado estado = Estado.PENDIENTE;
@@ -65,7 +94,7 @@ public class Solicitud {
     @OrderBy("solicitudItemId ASC")
     private List<SolicitudItem> items = new ArrayList<>();
 
-    // ----- Respuesta del proveedor -----
+    // ----- Proveedor elegido: copia de la oferta elegida (en el esquema anterior, la única respuesta) -----
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "respondida_por")

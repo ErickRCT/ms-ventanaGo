@@ -5,6 +5,7 @@ import com.ventanago.auth.repository.entity.Rol;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -15,4 +16,6 @@ public interface CuentaRepository extends JpaRepository<Cuenta, Long> {
     Optional<Cuenta> findByGoogleSub(String googleSub);
 
     boolean existsByRol(Rol rol);
+
+    List<Cuenta> findByRolAndActivoTrue(Rol rol);
 }

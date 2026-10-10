@@ -1,10 +1,14 @@
 package com.ventanago.solicitud.service;
 
 import com.ventanago.auth.repository.CuentaRepository;
+import com.ventanago.auth.repository.entity.Cuenta;
 import com.ventanago.auth.repository.entity.Rol;
-import com.ventanago.solicitud.repository.AvisoRepository;
-import com.ventanago.solicitud.repository.CarritoItemRepository;
-import com.ventanago.solicitud.repository.SolicitudRepository;
+import com.ventanago.comuna.repository.ComunaRepository;
+import com.ventanago.comuna.repository.entity.Comuna;
+import com.ventanago.proveedor.repository.entity.PerfilProveedor;
+import com.ventanago.proveedor.service.ProveedorService;
+import com.ventanago.proveedor.service.dto.ProveedorDtos.ProveedorResumenDto;
+import com.ventanago.solicitud.repository.*;
 import com.ventanago.solicitud.repository.entity.*;
 import com.ventanago.solicitud.repository.entity.Solicitud.Estado;
 import com.ventanago.solicitud.repository.entity.Solicitud.Servicio;
@@ -23,8 +27,9 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Carrito del cliente, solicitudes de cotización y avisos.
- * Mientras las solicitudes no se asignen a un proveedor en particular, todos los proveedores las ven y responden.
+ * Carrito del cliente, solicitudes de cotización, ofertas de los proveedores, chat y avisos.
+ * Cada solicitud llega a los proveedores que cubren su comuna y servicios (o solo a los que eligió el cliente);
+ * cada proveedor envía una oferta y el cliente elige una.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,12 +42,30 @@ public class SolicitudService {
     private static final int MAX_CANTIDAD = 99;
     private static final int MAX_ITEMS_CARRITO = 50;
     private static final long MAX_PRECIO = 100_000_000L;
+    private static final int MAX_PLAZO_DIAS = 365;
+    private static final int MAX_INVITADOS = 10;
+    private static final int MAX_FOTOS = 4;
+    private static final int MAX_BYTES_FOTO = 1_500_000;
+    private static final Set<String> TIPOS_FOTO = Set.of("image/jpeg", "image/png", "image/webp");
     private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
     private final CarritoItemRepository carritoRepository;
     private final SolicitudRepository solicitudRepository;
     private final AvisoRepository avisoRepository;
     private final CuentaRepository cuentaRepository;
+    private final OfertaRepository ofertaRepository;
+    private final ValoracionRepository valoracionRepository;
+    private final FotoSolicitudRepository fotoRepository;
+    private final MensajeOfertaRepository mensajeRepository;
+    private final ComunaRepository comunaRepository;
+    private final ProveedorService proveedorService;
+
+    /** Quién pide los datos: decide qué ofertas y qué datos de contacto ve. */
+    private record Vista(Long cuentaId, Rol rol) {
+        boolean proveedor() {
+            return rol == Rol.PROVEEDOR;
+        }
+    }
 
     // ---------- Carrito ----------
 
@@ -81,22 +104,46 @@ public class SolicitudService {
 
     // ---------- Solicitudes ----------
 
-    /** El cliente ve solo las suyas; proveedores y administrador ven todas. */
+    /** El cliente ve las suyas; cada proveedor, las que le llegaron o ya ofertó; el administrador, todas. */
     @Transactional(readOnly = true)
     public List<SolicitudDto> solicitudes(Long cuentaId, Rol rol) {
-        List<Solicitud> solicitudes = rol == Rol.CLIENTE
-                ? solicitudRepository.findByClienteCuentaIdOrderByNumeroAsc(cuentaId)
-                : solicitudRepository.findAllByOrderByNumeroAsc();
-        return solicitudes.stream().map(this::aDto).toList();
+        Vista vista = new Vista(cuentaId, rol);
+        List<Solicitud> solicitudes = switch (rol) {
+            case CLIENTE -> solicitudRepository.findByClienteCuentaIdOrderByNumeroAsc(cuentaId);
+            case ADMIN -> solicitudRepository.findAllByOrderByNumeroAsc();
+            case PROVEEDOR -> {
+                Map<Long, PerfilProveedor> perfiles = proveedorService.perfiles();
+                yield solicitudRepository.findAllByOrderByNumeroAsc().stream()
+                        .filter(s -> visibleParaProveedor(s, cuentaId, perfiles))
+                        .toList();
+            }
+        };
+        return aDtos(solicitudes, vista);
     }
 
-    /** Convierte el carrito del cliente en una solicitud pendiente, lo vacía y avisa a los proveedores. */
+    /**
+     * Convierte el carrito del cliente en una solicitud, lo vacía y avisa a los proveedores que la reciben.
+     * Sin ventanas en el carrito, la solicitud describe un trabajo (reparación, cambio de vidrio, visita técnica…).
+     */
     @Transactional
     public SolicitudDto enviarSolicitud(Long cuentaId, NuevaSolicitudRequest datos) {
         List<CarritoItem> carrito = carritoRepository.findByCuentaCuentaIdOrderByCarritoItemIdAsc(cuentaId);
-        if (carrito.isEmpty()) throw error(HttpStatus.BAD_REQUEST, "El carrito está vacío.");
         Set<Servicio> servicios = validarServicios(datos.servicios());
+        String observaciones = recortar(datos.observaciones(), 2000);
+        if (carrito.isEmpty()) {
+            if (servicios.contains(Servicio.FABRICACION)) {
+                throw error(HttpStatus.BAD_REQUEST, "Para pedir fabricación, primero agrega tus ventanas al carrito.");
+            }
+            if (observaciones.length() < 10) {
+                throw error(HttpStatus.BAD_REQUEST, "Describe el trabajo que necesitas (al menos 10 caracteres).");
+            }
+        }
         ContactoDto contacto = validarContacto(datos.contacto(), servicios);
+        if (datos.comunaId() != null && !comunaRepository.existsById(datos.comunaId())) {
+            throw error(HttpStatus.BAD_REQUEST, "La comuna elegida no existe.");
+        }
+        Set<Long> invitados = validarInvitados(datos.proveedores());
+        List<FotoSolicitud> fotos = validarFotos(datos.fotos());
 
         Solicitud solicitud = new Solicitud();
         solicitud.setCliente(cuentaRepository.getReferenceById(cuentaId));
@@ -106,7 +153,9 @@ public class SolicitudService {
         solicitud.setContactoTelefono(contacto.telefono());
         solicitud.setContactoDireccion(contacto.direccion());
         solicitud.setServicios(servicios);
-        solicitud.setObservaciones(recortar(datos.observaciones(), 2000));
+        solicitud.setObservaciones(observaciones);
+        solicitud.setComunaId(datos.comunaId());
+        solicitud.setInvitados(invitados);
         for (CarritoItem item : carrito) {
             SolicitudItem nuevo = new SolicitudItem();
             nuevo.setSolicitud(solicitud);
@@ -114,57 +163,93 @@ public class SolicitudService {
             solicitud.getItems().add(nuevo);
         }
         solicitudRepository.save(solicitud);
+        for (FotoSolicitud foto : fotos) {
+            foto.setSolicitud(solicitud);
+            fotoRepository.save(foto);
+        }
         carritoRepository.deleteAll(carrito);
 
-        crearAviso(Aviso.PROVEEDORES, solicitud.getNumero(), "Nueva solicitud N°" + solicitud.getNumero(),
-                contacto.nombre() + " solicitó cotizar " + carrito.size() + " tipo(s) de ventana.");
-        return aDto(solicitud);
-    }
-
-    /** Registra lo que decidió el proveedor y, si corresponde, avisa al cliente. */
-    @Transactional
-    public SolicitudDto responder(Long numero, Long proveedorId, RespuestaRequest respuesta) {
-        Solicitud solicitud = solicitudRepository.findById(numero)
-                .orElseThrow(() -> error(HttpStatus.NOT_FOUND, "No existe la solicitud N°" + numero + "."));
-        if (solicitud.getEstado() != Estado.PENDIENTE) {
-            throw error(HttpStatus.CONFLICT, "La solicitud N°" + numero + " ya fue respondida.");
+        String detalle = carrito.isEmpty()
+                ? contacto.nombre() + " pide " + servicios.stream().map(SolicitudService::nombreServicio).collect(Collectors.joining(", ")).toLowerCase(Locale.ROOT) + "."
+                : contacto.nombre() + " solicitó cotizar " + carrito.size() + " tipo(s) de ventana.";
+        Map<Long, PerfilProveedor> perfiles = proveedorService.perfiles();
+        for (Cuenta proveedor : cuentaRepository.findByRolAndActivoTrue(Rol.PROVEEDOR)) {
+            if (visibleParaProveedor(solicitud, proveedor.getCuentaId(), perfiles)) {
+                crearAviso(Aviso.deCuenta(proveedor.getCuentaId()), solicitud.getNumero(),
+                        (invitados.isEmpty() ? "Nueva solicitud N°" : "Te invitaron a cotizar la solicitud N°") + solicitud.getNumero(), detalle);
+            }
         }
-        Estado estado = parsearEstadoRespuesta(respuesta.estado());
-        String mensaje = recortar(respuesta.mensaje(), 2000);
-        if (estado != Estado.ACEPTADA && mensaje.isEmpty()) {
-            throw error(HttpStatus.BAD_REQUEST, estado == Estado.RECHAZADA ? "Indica el motivo del rechazo." : "Explica al cliente qué modificaste.");
-        }
-
-        if (estado != Estado.RECHAZADA) {
-            aplicarPrecios(solicitud, estado, respuesta.items());
-        }
-        solicitud.setEstado(estado);
-        solicitud.setMensajeRespuesta(mensaje);
-        solicitud.setFechaRespuesta(LocalDateTime.now());
-        solicitud.setRespondidaPor(cuentaRepository.getReferenceById(proveedorId));
-        solicitud.setTotal(estado == Estado.RECHAZADA ? null : vigentes(solicitud).stream()
-                .mapToLong(i -> i.getPrecioUnitario() * i.getVentana().getCantidad()).sum());
-        solicitud.setNotificadoEnApp(respuesta.notificarEnApp());
-        solicitud.setNotificadoPorCorreo(respuesta.notificarPorCorreo());
-
-        if (respuesta.notificarEnApp()) {
-            crearAviso(Aviso.deCuenta(solicitud.getCliente().getCuentaId()), numero,
-                    "Cotización N°" + numero + " " + estado.name().toLowerCase(Locale.ROOT), mensaje);
-        }
-        return aDto(solicitud);
+        return aDtos(List.of(solicitud), new Vista(cuentaId, Rol.CLIENTE)).get(0);
     }
 
     /**
-     * Aceptar: solo se definen precios. Modificar: además cambian medidas o cantidades,
-     * y se guarda una copia de lo que pidió el cliente para mostrarle la diferencia.
+     * El proveedor envía su oferta: acepta lo pedido con precio, lo modifica (medidas o cantidades) o no toma el trabajo.
+     * Una oferta por proveedor y solicitud, mientras la solicitud siga abierta.
      */
-    private void aplicarPrecios(Solicitud solicitud, Estado estado, List<ItemVentanaDto> recibidos) {
+    @Transactional
+    public SolicitudDto responder(Long numero, Long proveedorId, Rol rol, RespuestaRequest respuesta) {
+        Solicitud solicitud = buscar(numero);
+        if (solicitud.getEstado() != Estado.PENDIENTE) {
+            throw error(HttpStatus.CONFLICT, "La solicitud N°" + numero + " ya no recibe ofertas.");
+        }
+        if (rol == Rol.PROVEEDOR && !visibleParaProveedor(solicitud, proveedorId, proveedorService.perfiles())) {
+            throw error(HttpStatus.FORBIDDEN, "Esta solicitud no está dirigida a ti.");
+        }
+        if (solicitud.getOfertas().stream().anyMatch(o -> o.getProveedor().getCuentaId().equals(proveedorId))) {
+            throw error(HttpStatus.CONFLICT, "Ya enviaste tu oferta para la solicitud N°" + numero + ".");
+        }
+        Oferta.Tipo tipo = parsearTipoOferta(respuesta.estado());
+        String mensaje = recortar(respuesta.mensaje(), 2000);
+        if (tipo != Oferta.Tipo.ACEPTADA && mensaje.isEmpty()) {
+            throw error(HttpStatus.BAD_REQUEST, tipo == Oferta.Tipo.RECHAZADA ? "Indica el motivo por el que no tomas el trabajo." : "Explica al cliente qué modificaste.");
+        }
+        if (respuesta.plazoDias() != null && (respuesta.plazoDias() < 1 || respuesta.plazoDias() > MAX_PLAZO_DIAS)) {
+            throw error(HttpStatus.BAD_REQUEST, "El plazo debe estar entre 1 y " + MAX_PLAZO_DIAS + " días.");
+        }
+
+        Oferta oferta = new Oferta();
+        oferta.setSolicitud(solicitud);
+        oferta.setProveedor(cuentaRepository.getReferenceById(proveedorId));
+        oferta.setFecha(LocalDateTime.now());
+        oferta.setTipo(tipo);
+        oferta.setMensaje(mensaje);
+        oferta.setNotificadoEnApp(respuesta.notificarEnApp());
+        if (tipo != Oferta.Tipo.RECHAZADA) {
+            oferta.setPlazoDias(respuesta.plazoDias());
+            if (vigentes(solicitud).isEmpty()) {
+                if (tipo == Oferta.Tipo.MODIFICADA) throw error(HttpStatus.BAD_REQUEST, "Esta solicitud no tiene ventanas que modificar: usa Aceptar.");
+                if (respuesta.total() == null || respuesta.total() < 1 || respuesta.total() > MAX_PRECIO) {
+                    throw error(HttpStatus.BAD_REQUEST, "Ingresa el precio total del trabajo.");
+                }
+                oferta.setTotal(respuesta.total());
+            } else {
+                agregarItems(solicitud, oferta, respuesta.items());
+                oferta.setTotal(oferta.getItems().stream().mapToLong(i -> i.getPrecioUnitario() * i.getVentana().getCantidad()).sum());
+            }
+        }
+        ofertaRepository.save(oferta);
+        solicitud.getOfertas().add(oferta);
+
+        if (tipo != Oferta.Tipo.RECHAZADA && respuesta.notificarEnApp()) {
+            String nombre = proveedorService.resumenes(List.of(proveedorId)).get(proveedorId).nombre();
+            crearAviso(Aviso.deCuenta(solicitud.getCliente().getCuentaId()), numero,
+                    "Nueva oferta para tu solicitud N°" + numero,
+                    nombre + (tipo == Oferta.Tipo.MODIFICADA ? " propone cambios por " : " ofrece hacerlo por ") + pesos(oferta.getTotal()) + ".");
+        }
+        return aDtos(List.of(solicitud), new Vista(proveedorId, rol)).get(0);
+    }
+
+    /**
+     * Aceptar: solo se definen precios. Modificar: además cambian medidas o cantidades.
+     * Las ventanas de la oferta son copias de las de la solicitud, que no cambia.
+     */
+    private void agregarItems(Solicitud solicitud, Oferta oferta, List<ItemVentanaDto> recibidos) {
         List<SolicitudItem> actuales = vigentes(solicitud);
         Map<String, ItemVentanaDto> porId = (recibidos == null ? List.<ItemVentanaDto>of() : recibidos).stream()
                 .filter(i -> i.id() != null)
                 .collect(Collectors.toMap(ItemVentanaDto::id, Function.identity(), (a, b) -> a));
         if (porId.size() != actuales.size() || !actuales.stream().allMatch(i -> porId.containsKey(String.valueOf(i.getSolicitudItemId())))) {
-            throw error(HttpStatus.BAD_REQUEST, "La respuesta debe incluir todas las ventanas de la solicitud.");
+            throw error(HttpStatus.BAD_REQUEST, "La oferta debe incluir todas las ventanas de la solicitud.");
         }
 
         boolean cambioMedidas = false;
@@ -177,27 +262,185 @@ public class SolicitudService {
             DatosVentana v = item.getVentana();
             cambioMedidas |= v.getAnchoMm() != nuevo.anchoMm() || v.getAltoMm() != nuevo.altoMm() || v.getCantidad() != nuevo.cantidad();
         }
-        if (estado == Estado.ACEPTADA && cambioMedidas) {
+        if (oferta.getTipo() == Oferta.Tipo.ACEPTADA && cambioMedidas) {
             throw error(HttpStatus.BAD_REQUEST, "Cambiaste medidas o cantidades: usa Modificar para informarlo al cliente.");
         }
-        if (estado == Estado.MODIFICADA && !cambioMedidas) {
+        if (oferta.getTipo() == Oferta.Tipo.MODIFICADA && !cambioMedidas) {
             throw error(HttpStatus.BAD_REQUEST, "No cambiaste medidas ni cantidades. Si estás de acuerdo con lo pedido, usa Aceptar.");
         }
 
         for (SolicitudItem item : actuales) {
             ItemVentanaDto nuevo = porId.get(String.valueOf(item.getSolicitudItemId()));
-            if (estado == Estado.MODIFICADA) {
-                SolicitudItem copia = new SolicitudItem();
-                copia.setSolicitud(solicitud);
-                copia.setOriginal(true);
-                copia.setVentana(item.getVentana().copia());
-                solicitud.getItems().add(copia);
-                item.getVentana().setAnchoMm(nuevo.anchoMm());
-                item.getVentana().setAltoMm(nuevo.altoMm());
-                item.getVentana().setCantidad(nuevo.cantidad());
-            }
-            item.setPrecioUnitario(nuevo.precioUnitario());
+            OfertaItem copia = new OfertaItem();
+            copia.setOferta(oferta);
+            copia.setSolicitudItemId(item.getSolicitudItemId());
+            copia.setVentana(item.getVentana().copia());
+            copia.getVentana().setAnchoMm(nuevo.anchoMm());
+            copia.getVentana().setAltoMm(nuevo.altoMm());
+            copia.getVentana().setCantidad(nuevo.cantidad());
+            copia.setPrecioUnitario(nuevo.precioUnitario());
+            oferta.getItems().add(copia);
         }
+    }
+
+    /** El cliente elige una oferta: la solicitud queda adjudicada, las demás ofertas descartadas y todos avisados. */
+    @Transactional
+    public SolicitudDto elegirOferta(Long numero, Long ofertaId, Long cuentaId, Rol rol) {
+        Solicitud solicitud = delCliente(numero, cuentaId, rol);
+        if (solicitud.getEstado() != Estado.PENDIENTE) {
+            throw error(HttpStatus.CONFLICT, "La solicitud N°" + numero + " ya tiene una oferta elegida o fue cancelada.");
+        }
+        Oferta elegida = solicitud.getOfertas().stream().filter(o -> o.getOfertaId().equals(ofertaId)).findFirst()
+                .orElseThrow(() -> error(HttpStatus.NOT_FOUND, "La oferta no es de esta solicitud."));
+        if (elegida.getTipo() == Oferta.Tipo.RECHAZADA) throw error(HttpStatus.BAD_REQUEST, "Ese proveedor no tomó el trabajo.");
+
+        for (Oferta o : solicitud.getOfertas()) {
+            if (o == elegida) continue;
+            o.setEstado(Oferta.Estado.DESCARTADA);
+            if (o.getTipo() != Oferta.Tipo.RECHAZADA) {
+                crearAviso(Aviso.deCuenta(o.getProveedor().getCuentaId()), numero, "Solicitud N°" + numero + " adjudicada a otro proveedor",
+                        "El cliente eligió otra oferta. ¡Gracias por cotizar!");
+            }
+        }
+        elegida.setEstado(Oferta.Estado.ELEGIDA);
+        solicitud.setEstado(Estado.ADJUDICADA);
+        solicitud.setRespondidaPor(elegida.getProveedor());
+        solicitud.setFechaRespuesta(elegida.getFecha());
+        solicitud.setMensajeRespuesta(elegida.getMensaje());
+        solicitud.setTotal(elegida.getTotal());
+        crearAviso(Aviso.deCuenta(elegida.getProveedor().getCuentaId()), numero, "¡Te eligieron para la solicitud N°" + numero + "!",
+                solicitud.getContactoNombre() + " aceptó tu oferta de " + pesos(elegida.getTotal()) + ". Ya puedes ver sus datos de contacto.");
+        return aDtos(List.of(solicitud), new Vista(cuentaId, rol)).get(0);
+    }
+
+    /** El cliente retira su solicitud (abierta o adjudicada, mientras no se haya terminado). */
+    @Transactional
+    public SolicitudDto cancelar(Long numero, Long cuentaId, Rol rol) {
+        Solicitud solicitud = delCliente(numero, cuentaId, rol);
+        if (solicitud.getEstado() != Estado.PENDIENTE && solicitud.getEstado() != Estado.ADJUDICADA) {
+            throw error(HttpStatus.CONFLICT, "La solicitud N°" + numero + " ya no se puede cancelar.");
+        }
+        for (Oferta o : solicitud.getOfertas()) {
+            if (o.getEstado() != Oferta.Estado.DESCARTADA && o.getTipo() != Oferta.Tipo.RECHAZADA) {
+                crearAviso(Aviso.deCuenta(o.getProveedor().getCuentaId()), numero, "Solicitud N°" + numero + " cancelada",
+                        "El cliente canceló su solicitud.");
+            }
+            o.setEstado(Oferta.Estado.DESCARTADA);
+        }
+        solicitud.setEstado(Estado.CANCELADA);
+        return aDtos(List.of(solicitud), new Vista(cuentaId, rol)).get(0);
+    }
+
+    /** Con el trabajo hecho, el cliente valora al proveedor elegido y la solicitud queda terminada. */
+    @Transactional
+    public SolicitudDto valorar(Long numero, Long cuentaId, Rol rol, ValoracionRequest datos) {
+        Solicitud solicitud = delCliente(numero, cuentaId, rol);
+        if (solicitud.getEstado() != Estado.ADJUDICADA) {
+            throw error(HttpStatus.CONFLICT, "Solo puedes valorar un trabajo adjudicado que aún no hayas valorado.");
+        }
+        if (datos.estrellas() < 1 || datos.estrellas() > 5) throw error(HttpStatus.BAD_REQUEST, "Elige de 1 a 5 estrellas.");
+        Oferta elegida = solicitud.getOfertas().stream().filter(o -> o.getEstado() == Oferta.Estado.ELEGIDA).findFirst()
+                .orElseThrow(() -> error(HttpStatus.CONFLICT, "La solicitud no tiene una oferta elegida."));
+        Valoracion valoracion = new Valoracion();
+        valoracion.setSolicitud(solicitud);
+        valoracion.setProveedor(elegida.getProveedor());
+        valoracion.setEstrellas(datos.estrellas());
+        valoracion.setComentario(recortar(datos.comentario(), 1000));
+        valoracion.setFecha(LocalDateTime.now());
+        valoracionRepository.save(valoracion);
+        solicitud.setEstado(Estado.TERMINADA);
+        crearAviso(Aviso.deCuenta(elegida.getProveedor().getCuentaId()), numero, "Te valoraron con " + datos.estrellas() + " estrella(s)",
+                valoracion.getComentario().isEmpty() ? "Solicitud N°" + numero + " terminada." : valoracion.getComentario());
+        return aDtos(List.of(solicitud), new Vista(cuentaId, rol)).get(0);
+    }
+
+    // ---------- Fotos ----------
+
+    @Transactional(readOnly = true)
+    public FotoSolicitud foto(Long numero, Long fotoId, Long cuentaId, Rol rol) {
+        Solicitud solicitud = buscar(numero);
+        if (!puedeVer(solicitud, cuentaId, rol)) throw error(HttpStatus.FORBIDDEN, "No tienes acceso a esta solicitud.");
+        FotoSolicitud foto = fotoRepository.findByFotoIdAndSolicitudNumero(fotoId, numero)
+                .orElseThrow(() -> error(HttpStatus.NOT_FOUND, "No existe la foto."));
+        foto.getDatos(); // se carga dentro de la transacción
+        return foto;
+    }
+
+    // ---------- Chat de cada oferta ----------
+
+    @Transactional(readOnly = true)
+    public List<MensajeDto> mensajes(Long ofertaId, Long cuentaId, Rol rol) {
+        Oferta oferta = ofertaParticipante(ofertaId, cuentaId, rol);
+        return mensajeRepository.findByOfertaOfertaIdOrderByFechaAscMensajeIdAsc(oferta.getOfertaId()).stream()
+                .map(m -> aDto(m, cuentaId))
+                .toList();
+    }
+
+    @Transactional
+    public MensajeDto enviarMensaje(Long ofertaId, Long cuentaId, Rol rol, String texto) {
+        Oferta oferta = ofertaParticipante(ofertaId, cuentaId, rol);
+        if (oferta.getEstado() == Oferta.Estado.DESCARTADA || oferta.getSolicitud().getEstado() == Estado.CANCELADA) {
+            throw error(HttpStatus.CONFLICT, "Esta conversación está cerrada.");
+        }
+        String limpio = recortar(texto, 1000);
+        if (limpio.isEmpty()) throw error(HttpStatus.BAD_REQUEST, "Escribe un mensaje.");
+        MensajeOferta mensaje = new MensajeOferta();
+        mensaje.setOferta(oferta);
+        mensaje.setAutor(cuentaRepository.getReferenceById(cuentaId));
+        mensaje.setFecha(LocalDateTime.now());
+        mensaje.setTexto(limpio);
+        mensajeRepository.save(mensaje);
+
+        Long numero = oferta.getSolicitud().getNumero();
+        Long clienteId = oferta.getSolicitud().getCliente().getCuentaId();
+        Long proveedorId = oferta.getProveedor().getCuentaId();
+        String vistaPrevia = limpio.length() > 120 ? limpio.substring(0, 120) + "…" : limpio;
+        if (!cuentaId.equals(clienteId)) {
+            String nombre = proveedorService.resumenes(List.of(proveedorId)).get(proveedorId).nombre();
+            crearAviso(Aviso.deCuenta(clienteId), numero, "Mensaje de " + nombre + " (solicitud N°" + numero + ")", vistaPrevia);
+        }
+        if (!cuentaId.equals(proveedorId)) {
+            crearAviso(Aviso.deCuenta(proveedorId), numero, "Mensaje del cliente (solicitud N°" + numero + ")", vistaPrevia);
+        }
+        return aDto(mensaje, cuentaId);
+    }
+
+    private Oferta ofertaParticipante(Long ofertaId, Long cuentaId, Rol rol) {
+        Oferta oferta = ofertaRepository.findById(ofertaId).orElseThrow(() -> error(HttpStatus.NOT_FOUND, "No existe la oferta."));
+        boolean participa = rol == Rol.ADMIN
+                || oferta.getProveedor().getCuentaId().equals(cuentaId)
+                || oferta.getSolicitud().getCliente().getCuentaId().equals(cuentaId);
+        if (!participa) throw error(HttpStatus.FORBIDDEN, "No participas en esta conversación.");
+        return oferta;
+    }
+
+    private MensajeDto aDto(MensajeOferta m, Long cuentaId) {
+        Long autorId = m.getAutor().getCuentaId();
+        Oferta oferta = m.getOferta();
+        String autor = autorId.equals(oferta.getSolicitud().getCliente().getCuentaId()) ? "Cliente"
+                : autorId.equals(oferta.getProveedor().getCuentaId()) ? "Proveedor" : "VentanaGo";
+        return new MensajeDto(m.getMensajeId(), iso(m.getFecha()), autor, autorId.equals(cuentaId), m.getTexto());
+    }
+
+    // ---------- Precio referencial ----------
+
+    /** Cuartiles del precio por m² de las ventanas ofrecidas. Con menos de 3 muestras no se informa rango. */
+    @Transactional(readOnly = true)
+    public PrecioReferenciaDto precioReferencia() {
+        List<Double> porM2 = ofertaRepository.preciosOfrecidos().stream()
+                .map(f -> ((Number) f[0]).doubleValue() / (((Number) f[1]).doubleValue() * ((Number) f[2]).doubleValue() / 1_000_000d))
+                .sorted()
+                .toList();
+        if (porM2.size() < 3) return new PrecioReferenciaDto(porM2.size(), null, null, null);
+        return new PrecioReferenciaDto(porM2.size(), percentil(porM2, 0.25), percentil(porM2, 0.5), percentil(porM2, 0.75));
+    }
+
+    private static Long percentil(List<Double> ordenados, double p) {
+        double posicion = p * (ordenados.size() - 1);
+        int abajo = (int) Math.floor(posicion);
+        int arriba = (int) Math.ceil(posicion);
+        double valor = ordenados.get(abajo) + (ordenados.get(arriba) - ordenados.get(abajo)) * (posicion - abajo);
+        return Math.round(valor);
     }
 
     // ---------- Avisos ----------
@@ -215,9 +458,9 @@ public class SolicitudService {
         avisoRepository.marcarLeidos(destinatario);
     }
 
-    /** Clientes y administrador reciben sus propios avisos; los proveedores, los de solicitudes nuevas. */
+    /** Cada cuenta recibe sus propios avisos (los proveedores, solo los de las solicitudes que les llegan). */
     public static String destinatarioDe(Long cuentaId, Rol rol) {
-        return rol == Rol.PROVEEDOR ? Aviso.PROVEEDORES : Aviso.deCuenta(cuentaId);
+        return Aviso.deCuenta(cuentaId);
     }
 
     private void crearAviso(String destinatario, Long numero, String titulo, String mensaje) {
@@ -225,9 +468,45 @@ public class SolicitudService {
         aviso.setDestinatario(destinatario);
         aviso.setFecha(LocalDateTime.now());
         aviso.setSolicitudNumero(numero);
-        aviso.setTitulo(titulo);
+        aviso.setTitulo(titulo.length() > 255 ? titulo.substring(0, 255) : titulo);
         aviso.setMensaje(mensaje);
         avisoRepository.save(aviso);
+    }
+
+    // ---------- Quién ve qué ----------
+
+    /**
+     * El proveedor ve las solicitudes que ya ofertó y las abiertas que le llegan: si el cliente eligió proveedores,
+     * solo esos; si no, los que cubren la comuna y alguno de los servicios.
+     */
+    private static boolean visibleParaProveedor(Solicitud s, Long proveedorId, Map<Long, PerfilProveedor> perfiles) {
+        if (s.getOfertas().stream().anyMatch(o -> o.getProveedor().getCuentaId().equals(proveedorId))) return true;
+        if (s.getEstado() != Estado.PENDIENTE) return false;
+        if (!s.getInvitados().isEmpty()) return s.getInvitados().contains(proveedorId);
+        PerfilProveedor perfil = perfiles.get(proveedorId);
+        return perfil == null || ProveedorService.atiende(perfil, s.getComunaId(), s.getServicios());
+    }
+
+    private boolean puedeVer(Solicitud s, Long cuentaId, Rol rol) {
+        return switch (rol) {
+            case ADMIN -> true;
+            case CLIENTE -> s.getCliente().getCuentaId().equals(cuentaId);
+            case PROVEEDOR -> visibleParaProveedor(s, cuentaId, proveedorService.perfiles());
+        };
+    }
+
+    private Solicitud buscar(Long numero) {
+        return solicitudRepository.findById(numero)
+                .orElseThrow(() -> error(HttpStatus.NOT_FOUND, "No existe la solicitud N°" + numero + "."));
+    }
+
+    /** La solicitud, si es del cliente que la pide (el administrador puede actuar sobre cualquiera). */
+    private Solicitud delCliente(Long numero, Long cuentaId, Rol rol) {
+        Solicitud solicitud = buscar(numero);
+        if (rol != Rol.ADMIN && !solicitud.getCliente().getCuentaId().equals(cuentaId)) {
+            throw error(HttpStatus.FORBIDDEN, "La solicitud N°" + numero + " no es tuya.");
+        }
+        return solicitud;
     }
 
     // ---------- Validación ----------
@@ -269,7 +548,7 @@ public class SolicitudService {
         if (cantidad < 1 || cantidad > MAX_CANTIDAD) throw error(HttpStatus.BAD_REQUEST, "La cantidad debe estar entre 1 y " + MAX_CANTIDAD + ".");
     }
 
-    /** Igual que el front: el teléfono es opcional y la dirección solo se exige para instalación o flete. */
+    /** Igual que el front: el teléfono es opcional y la dirección solo se exige si alguien debe ir al lugar. */
     private static ContactoDto validarContacto(ContactoDto contacto, Set<Servicio> servicios) {
         if (contacto == null) throw error(HttpStatus.BAD_REQUEST, "Faltan los datos de contacto.");
         String nombre = recortar(contacto.nombre(), 255);
@@ -279,7 +558,7 @@ public class SolicitudService {
         if (nombre.isEmpty()) throw error(HttpStatus.BAD_REQUEST, "Ingresa tu nombre.");
         if (!EMAIL.matcher(email).matches()) throw error(HttpStatus.BAD_REQUEST, "Ingresa un correo válido.");
         if (direccion.isEmpty() && servicios.stream().anyMatch(s -> s != Servicio.FABRICACION)) {
-            throw error(HttpStatus.BAD_REQUEST, "Indica la dirección para la instalación o el flete.");
+            throw error(HttpStatus.BAD_REQUEST, "Indica la dirección donde se hará el trabajo.");
         }
         return new ContactoDto(nombre, email, telefono, direccion);
     }
@@ -297,14 +576,42 @@ public class SolicitudService {
         return resultado;
     }
 
-    private static Estado parsearEstadoRespuesta(String estado) {
-        try {
-            Estado parseado = Estado.valueOf(estado);
-            if (parseado != Estado.PENDIENTE) return parseado;
-        } catch (IllegalArgumentException | NullPointerException ignored) {
-            // cae al error de abajo
+    private Set<Long> validarInvitados(List<Long> proveedores) {
+        Set<Long> ids = new LinkedHashSet<>(proveedores == null ? List.of() : proveedores);
+        if (ids.size() > MAX_INVITADOS) throw error(HttpStatus.BAD_REQUEST, "Puedes elegir hasta " + MAX_INVITADOS + " proveedores.");
+        if (ids.isEmpty()) return ids;
+        long validos = cuentaRepository.findAllById(ids).stream().filter(c -> c.getRol() == Rol.PROVEEDOR && c.isActivo()).count();
+        if (validos != ids.size()) throw error(HttpStatus.BAD_REQUEST, "Alguno de los proveedores elegidos ya no está disponible.");
+        return ids;
+    }
+
+    private static List<FotoSolicitud> validarFotos(List<FotoNuevaDto> fotos) {
+        List<FotoSolicitud> resultado = new ArrayList<>();
+        if (fotos == null) return resultado;
+        if (fotos.size() > MAX_FOTOS) throw error(HttpStatus.BAD_REQUEST, "Puedes adjuntar hasta " + MAX_FOTOS + " fotos.");
+        for (FotoNuevaDto f : fotos) {
+            if (f == null || !TIPOS_FOTO.contains(f.tipoContenido())) throw error(HttpStatus.BAD_REQUEST, "Las fotos deben ser JPEG, PNG o WebP.");
+            byte[] datos;
+            try {
+                datos = Base64.getDecoder().decode(f.datos() == null ? "" : f.datos());
+            } catch (IllegalArgumentException e) {
+                throw error(HttpStatus.BAD_REQUEST, "Una de las fotos llegó dañada.");
+            }
+            if (datos.length == 0 || datos.length > MAX_BYTES_FOTO) throw error(HttpStatus.BAD_REQUEST, "Cada foto debe pesar menos de 1,5 MB.");
+            FotoSolicitud foto = new FotoSolicitud();
+            foto.setTipoContenido(f.tipoContenido());
+            foto.setDatos(datos);
+            resultado.add(foto);
         }
-        throw error(HttpStatus.BAD_REQUEST, "La respuesta debe ser ACEPTADA, MODIFICADA o RECHAZADA.");
+        return resultado;
+    }
+
+    private static Oferta.Tipo parsearTipoOferta(String tipo) {
+        try {
+            return Oferta.Tipo.valueOf(tipo);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw error(HttpStatus.BAD_REQUEST, "La respuesta debe ser ACEPTADA, MODIFICADA o RECHAZADA.");
+        }
     }
 
     // ---------- Conversión ----------
@@ -313,27 +620,96 @@ public class SolicitudService {
         return solicitud.getItems().stream().filter(i -> !i.isOriginal()).toList();
     }
 
-    private SolicitudDto aDto(Solicitud s) {
-        List<ItemVentanaDto> items = new ArrayList<>();
-        List<ItemVentanaDto> originales = new ArrayList<>();
-        for (SolicitudItem item : s.getItems()) {
-            ItemVentanaDto dto = aDto(String.valueOf(item.getSolicitudItemId()), item.getVentana(), item.getPrecioUnitario());
-            (item.isOriginal() ? originales : items).add(dto);
+    /** Convierte varias solicitudes juntando las consultas de proveedores, comunas y mensajes. */
+    private List<SolicitudDto> aDtos(List<Solicitud> solicitudes, Vista vista) {
+        Set<Long> proveedores = new HashSet<>();
+        Set<Long> ofertas = new HashSet<>();
+        Set<Long> comunas = new HashSet<>();
+        for (Solicitud s : solicitudes) {
+            for (Oferta o : s.getOfertas()) {
+                proveedores.add(o.getProveedor().getCuentaId());
+                ofertas.add(o.getOfertaId());
+            }
+            if (s.getComunaId() != null) comunas.add(s.getComunaId());
         }
-        RespuestaDto respuesta = s.getEstado() == Estado.PENDIENTE ? null : new RespuestaDto(
-                iso(s.getFechaRespuesta()), s.getMensajeRespuesta(), s.getTotal(),
-                Boolean.TRUE.equals(s.getNotificadoEnApp()), Boolean.TRUE.equals(s.getNotificadoPorCorreo()));
+        Map<Long, ProveedorResumenDto> resumenes = proveedorService.resumenes(proveedores);
+        Map<Long, Long> mensajes = ofertas.isEmpty() ? Map.of() : mensajeRepository.contarPorOferta(ofertas).stream()
+                .collect(Collectors.toMap(f -> (Long) f[0], f -> (Long) f[1]));
+        Map<Long, ComunaRefDto> refComunas = comunaRepository.findAllById(comunas).stream()
+                .collect(Collectors.toMap(Comuna::getComunaId, c -> new ComunaRefDto(c.getComunaId(), c.getNombre(), c.getRegion().getNombre())));
+        return solicitudes.stream().map(s -> aDto(s, vista, resumenes, mensajes, refComunas)).toList();
+    }
+
+    private SolicitudDto aDto(Solicitud s, Vista vista, Map<Long, ProveedorResumenDto> resumenes, Map<Long, Long> mensajes,
+                              Map<Long, ComunaRefDto> comunas) {
+        List<ItemVentanaDto> items = vigentes(s).stream()
+                .map(i -> aDto(String.valueOf(i.getSolicitudItemId()), i.getVentana(), null))
+                .toList();
+        List<OfertaDto> ofertas = s.getOfertas().stream().map(o -> aDto(o, resumenes, mensajes)).toList();
+        OfertaDto miOferta = vista.proveedor()
+                ? ofertas.stream().filter(o -> o.proveedor().cuentaId().equals(vista.cuentaId())).findFirst().orElse(null)
+                : null;
+        OfertaDto elegida = ofertas.stream().filter(o -> Oferta.Estado.ELEGIDA.name().equals(o.estado())).findFirst().orElse(null);
+
+        // Antes de ser elegido, el proveedor solo ve el primer nombre del cliente y la comuna.
+        boolean contactoCompleto = !vista.proveedor() || (miOferta != null && miOferta == elegida);
+        ContactoDto contacto = contactoCompleto
+                ? new ContactoDto(s.getContactoNombre(), s.getContactoEmail(), s.getContactoTelefono(), s.getContactoDireccion())
+                : new ContactoDto(primerNombre(s.getContactoNombre()), "", "", "");
+
+        OfertaDto paraRespuesta = vista.proveedor() ? miOferta : elegida;
+        RespuestaDto respuesta = paraRespuesta == null ? null
+                : new RespuestaDto(paraRespuesta.fecha(), paraRespuesta.mensaje(), paraRespuesta.total(), true, false);
+        ValoracionDto valoracion = s.getEstado() == Estado.TERMINADA
+                ? valoracionRepository.findBySolicitudNumero(s.getNumero()).map(ProveedorService::aDto).orElse(null)
+                : null;
+        int cantidadOfertas = (int) s.getOfertas().stream().filter(o -> o.getTipo() != Oferta.Tipo.RECHAZADA).count();
+
         return new SolicitudDto(
-                s.getNumero(), iso(s.getFecha()), s.getCliente().getEmail(),
-                new ContactoDto(s.getContactoNombre(), s.getContactoEmail(), s.getContactoTelefono(), s.getContactoDireccion()),
+                s.getNumero(), iso(s.getFecha()), contactoCompleto ? s.getCliente().getEmail() : null, contacto,
                 s.getServicios().stream().map(Enum::name).toList(), s.getObservaciones(),
-                items, originales.isEmpty() ? null : originales, s.getEstado().name(), respuesta);
+                items, null, s.getEstado().name(), respuesta,
+                s.getComunaId() == null ? null : comunas.get(s.getComunaId()),
+                vista.proveedor() ? List.of() : List.copyOf(s.getInvitados()),
+                vista.proveedor() ? null : ofertas, miOferta, cantidadOfertas,
+                fotoRepository.idsDeSolicitud(s.getNumero()), valoracion);
+    }
+
+    private OfertaDto aDto(Oferta o, Map<Long, ProveedorResumenDto> resumenes, Map<Long, Long> mensajes) {
+        Long proveedorId = o.getProveedor().getCuentaId();
+        List<ItemVentanaDto> items = o.getItems().stream()
+                .map(i -> aDto(String.valueOf(i.getSolicitudItemId()), i.getVentana(), i.getPrecioUnitario()))
+                .toList();
+        return new OfertaDto(o.getOfertaId(), o.getSolicitud().getNumero(), resumenes.get(proveedorId), iso(o.getFecha()),
+                o.getTipo().name(), o.getEstado().name(), o.getMensaje(), o.getTotal(), o.getPlazoDias(), items,
+                o.getEstado() == Oferta.Estado.ELEGIDA ? proveedorService.contacto(proveedorId) : null,
+                mensajes.getOrDefault(o.getOfertaId(), 0L));
     }
 
     private static ItemVentanaDto aDto(String id, DatosVentana v, Long precio) {
         return new ItemVentanaDto(id, v.getDescripcion(), v.getPautaId(), v.getSerieNombre(), v.getImagenPauta(), v.getHojas(),
                 v.getAnchoMm(), v.getAltoMm(), v.getCantidad(), v.getColorId(), v.getColorNombre(), v.getVidrioId(),
                 v.getVidrioNombre(), v.getObservaciones() == null ? "" : v.getObservaciones(), precio);
+    }
+
+    private static String primerNombre(String nombre) {
+        return nombre == null || nombre.isBlank() ? "Cliente" : nombre.trim().split("\\s+")[0];
+    }
+
+    public static String nombreServicio(Servicio s) {
+        return switch (s) {
+            case FABRICACION -> "Fabricación";
+            case INSTALACION -> "Instalación";
+            case FLETE -> "Flete";
+            case REPARACION -> "Reparación";
+            case CAMBIO_VIDRIO -> "Cambio de vidrio";
+            case MANTENCION -> "Mantención";
+            case MEDICION -> "Visita técnica";
+        };
+    }
+
+    private static String pesos(Long valor) {
+        return valor == null ? "" : "$" + String.format(Locale.forLanguageTag("es-CL"), "%,d", valor).replace(',', '.');
     }
 
     /** Fecha con zona, para que el navegador la muestre en su hora local. */

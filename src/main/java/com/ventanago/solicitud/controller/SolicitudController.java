@@ -1,14 +1,18 @@
 package com.ventanago.solicitud.controller;
 
 import com.ventanago.auth.SesionActual;
+import com.ventanago.solicitud.repository.entity.FotoSolicitud;
 import com.ventanago.solicitud.service.SolicitudService;
 import com.ventanago.solicitud.service.dto.SolicitudDtos.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.List;
 
 /** Los permisos por rol de cada ruta están en SeguridadConfig. */
@@ -55,10 +59,61 @@ public class SolicitudController {
         return solicitudService.enviarSolicitud(SesionActual.de(jwt).cuentaId(), datos);
     }
 
-    /** Proveedor: acepta, modifica o rechaza. */
+    /** Proveedor: envía su oferta (acepta con precio, propone cambios o no toma el trabajo). */
     @PostMapping("/solicitudes/{numero}/respuesta")
     public SolicitudDto responder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long numero, @RequestBody RespuestaRequest respuesta) {
-        return solicitudService.responder(numero, SesionActual.de(jwt).cuentaId(), respuesta);
+        SesionActual sesion = SesionActual.de(jwt);
+        return solicitudService.responder(numero, sesion.cuentaId(), sesion.rol(), respuesta);
+    }
+
+    /** Cliente: elige una de las ofertas. */
+    @PostMapping("/solicitudes/{numero}/ofertas/{ofertaId}/elegir")
+    public SolicitudDto elegir(@AuthenticationPrincipal Jwt jwt, @PathVariable Long numero, @PathVariable Long ofertaId) {
+        SesionActual sesion = SesionActual.de(jwt);
+        return solicitudService.elegirOferta(numero, ofertaId, sesion.cuentaId(), sesion.rol());
+    }
+
+    @PostMapping("/solicitudes/{numero}/cancelar")
+    public SolicitudDto cancelar(@AuthenticationPrincipal Jwt jwt, @PathVariable Long numero) {
+        SesionActual sesion = SesionActual.de(jwt);
+        return solicitudService.cancelar(numero, sesion.cuentaId(), sesion.rol());
+    }
+
+    /** Cliente: valora al proveedor elegido; la solicitud queda terminada. */
+    @PostMapping("/solicitudes/{numero}/valoracion")
+    public SolicitudDto valorar(@AuthenticationPrincipal Jwt jwt, @PathVariable Long numero, @RequestBody ValoracionRequest datos) {
+        SesionActual sesion = SesionActual.de(jwt);
+        return solicitudService.valorar(numero, sesion.cuentaId(), sesion.rol(), datos);
+    }
+
+    @GetMapping("/solicitudes/{numero}/fotos/{fotoId}")
+    public ResponseEntity<byte[]> foto(@AuthenticationPrincipal Jwt jwt, @PathVariable Long numero, @PathVariable Long fotoId) {
+        SesionActual sesion = SesionActual.de(jwt);
+        FotoSolicitud foto = solicitudService.foto(numero, fotoId, sesion.cuentaId(), sesion.rol());
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(foto.getTipoContenido()))
+                .cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePrivate())
+                .body(foto.getDatos());
+    }
+
+    /** Público: rango de precio por m² según las ofertas ya enviadas. */
+    @GetMapping("/precios/referencia")
+    public PrecioReferenciaDto precioReferencia() {
+        return solicitudService.precioReferencia();
+    }
+
+    // ---------- Chat de cada oferta (cliente y proveedor) ----------
+
+    @GetMapping("/ofertas/{ofertaId}/mensajes")
+    public List<MensajeDto> mensajes(@AuthenticationPrincipal Jwt jwt, @PathVariable Long ofertaId) {
+        SesionActual sesion = SesionActual.de(jwt);
+        return solicitudService.mensajes(ofertaId, sesion.cuentaId(), sesion.rol());
+    }
+
+    @PostMapping("/ofertas/{ofertaId}/mensajes")
+    public MensajeDto enviarMensaje(@AuthenticationPrincipal Jwt jwt, @PathVariable Long ofertaId, @RequestBody NuevoMensajeRequest datos) {
+        SesionActual sesion = SesionActual.de(jwt);
+        return solicitudService.enviarMensaje(ofertaId, sesion.cuentaId(), sesion.rol(), datos.texto());
     }
 
     // ---------- Avisos ----------
