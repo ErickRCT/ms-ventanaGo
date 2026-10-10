@@ -53,7 +53,7 @@
 </table>
 
 <table border="0" width="100%" cellspacing="10" style="font-size: 14px; margin-top: 30px">
-    <tr th:each="ventana : ${cotizacion.ventanas}">
+    <tr th:each="linea : ${lineas}" th:with="ventana=${linea.ventana}">
         <td width="30%" valign="top">
             <table cellspacing="0" border="0" style="font-size: 12px;">
                 <tr >
@@ -89,11 +89,11 @@
                 <tr>
                     <td align="right">Carpinteria:</td>
 
-                    <td align="left" style="padding-left: 20px;"><strong><span th:text="${#numbers.formatDecimal((ventana.ancho/1000 * ventana.alto/1000) * ventana.cantidad,1,1) } "></span>m²</strong></td>
+                    <td align="left" style="padding-left: 20px;"><strong><span th:text="${#numbers.formatDecimal(linea.m2, 1, 2, 'COMMA')}"></span> m²</strong></td>
                 </tr>
                 <tr>
                     <td align="right" style="white-space: nowrap; overflow: hidden;">Valor Unitario: </td>
-                    <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(ventana.precioNeto, 3, 'POINT')}"></span></strong></td>
+                    <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(linea.precioUnitario, 1, 'POINT')}"></span></strong></td>
                 </tr>
                 <tr>
                     <td align="right">Unidades: </td>
@@ -101,7 +101,7 @@
                 </tr>
                 <tr>
                     <td align="right">Total Item: </td>
-                    <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(ventana.precioNeto * ventana.cantidad, 3, 'POINT')}"></span></strong></td>
+                    <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(linea.totalItem, 1, 'POINT')}"></span></strong></td>
                 </tr>
             </table>
         </td>
@@ -111,25 +111,48 @@
 <hr style="color: #ccc"/>
 <table border="0" width="100%" style="margin-top:50px; margin-bottom:0;font-size: 12px">
     <tr>
-        <td align="right" width="83%">Cantidad Unidades: </td>
-        <td align="left" width="17%" style="padding-left: 20px;"><strong>1</strong></td>
+        <td align="right" width="75%">Cantidad unidades:</td>
+        <td align="left" width="25%" style="padding-left: 20px;"><strong><span th:text="${unidades}"></span></strong></td>
     </tr>
     <tr>
-        <td align="right">Total M2:</td>
-        <td align="left" style="padding-left: 20px;"><strong><span th:text="${m2Total + 'm2'}"></span></strong></td>
+        <td align="right">Total m²:</td>
+        <td align="left" style="padding-left: 20px;"><strong><span th:text="${#numbers.formatDecimal(m2Total, 1, 2, 'COMMA')}"></span> m²</strong></td>
+    </tr>
+    <tr>
+        <td align="right">Ventanas:</td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(resumen.ventanas(), 1, 'POINT')}"></span></strong></td>
+    </tr>
+    <tr th:if="${cotizacion.valorFlete != null and cotizacion.valorFlete > 0}">
+        <td align="right">Flete<span th:if="${cotizacion.flete != null and !#strings.isEmpty(cotizacion.flete)}" th:text="${' (' + cotizacion.flete + ')'}"></span>:</td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.valorFlete, 1, 'POINT')}"></span></strong></td>
+    </tr>
+    <tr th:if="${cotizacion.valorInstalacion != null and cotizacion.valorInstalacion > 0}">
+        <td align="right">Instalación<span th:if="${cotizacion.instalacion != null and !#strings.isEmpty(cotizacion.instalacion)}" th:text="${' (' + cotizacion.instalacion + ')'}"></span>:</td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.valorInstalacion, 1, 'POINT')}"></span></strong></td>
+    </tr>
+    <tr th:if="${cotizacion.valorManoDeObra != null and cotizacion.valorManoDeObra > 0}">
+        <td align="right">Mano de obra:</td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.valorManoDeObra, 1, 'POINT')}"></span></strong></td>
+    </tr>
+    <tr th:if="${cotizacion.valorOtrosGastos != null and cotizacion.valorOtrosGastos > 0}">
+        <td align="right">Otros<span th:if="${cotizacion.otrosGastos != null and !#strings.isEmpty(cotizacion.otrosGastos)}" th:text="${' (' + cotizacion.otrosGastos + ')'}"></span>:</td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.valorOtrosGastos, 1, 'POINT')}"></span></strong></td>
     </tr>
     <tr>
         <td align="right">Neto:</td>
-        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.neto, 3, 'POINT')}"></span></strong></td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(resumen.neto(), 1, 'POINT')}"></span></strong></td>
     </tr>
     <tr>
         <td align="right">IVA 19%:</td>
-        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(cotizacion.neto * 0.1, 3, 'POINT')}"></span></strong></td>
+        <td align="left" style="padding-left: 20px;"><strong>$ <span th:text="${#numbers.formatInteger(resumen.iva(), 1, 'POINT')}"></span></strong></td>
     </tr>
     <tr>
         <td align="right" style="font-size: 16px"><strong>Total:</strong></td>
-        <td align="left" style="padding-left: 20px;font-size: 19px"><strong>$<span th:text="${#numbers.formatInteger(cotizacion.neto * 1.19, 3, 'POINT')}"></span></strong></td>
+        <td align="left" style="padding-left: 20px;font-size: 19px"><strong>$ <span th:text="${#numbers.formatInteger(resumen.total(), 1, 'POINT')}"></span></strong></td>
     </tr>
 </table>
+<p th:if="${cotizacion.condiciones != null and !#strings.isEmpty(cotizacion.condiciones)}" style="font-size: 11px; margin-top: 30px">
+    <strong>Condiciones:</strong> <span th:text="${cotizacion.condiciones}"></span>
+</p>
 </body>
 </html>

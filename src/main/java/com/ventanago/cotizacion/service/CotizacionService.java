@@ -12,4 +12,7 @@ public interface CotizacionService {
     CotizacionDto agregarCotizacion(CotizacionDto cotizacionDto);
 
     CotizacionDto modificarCotizacion(CotizacionDto cotizacionDto);
+
+    /** Recalcula neto, m² y unidades a partir de las ventanas guardadas (reemplaza los triggers de la BD antigua). */
+    void recalcularTotales(Long cotizacionId);
 }

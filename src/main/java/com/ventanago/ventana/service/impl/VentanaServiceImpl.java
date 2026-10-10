@@ -1,5 +1,6 @@
 package com.ventanago.ventana.service.impl;
 
+import com.ventanago.cotizacion.service.CotizacionService;
 import com.ventanago.pauta.service.dto.PautaDto;
 import com.ventanago.ventana.repository.VentanaRepository;
 import com.ventanago.ventana.repository.entity.Ventana;
@@ -22,6 +23,8 @@ public class VentanaServiceImpl implements VentanaService {
 
     private final VentanaMapper ventanaMapper;
 
+    private final CotizacionService cotizacionService;
+
     @Override
     public List<VentanaDto> obtenerVentanas(){
         List<Ventana> ventanas = ventanaRepository.findAll();
@@ -41,8 +44,11 @@ public class VentanaServiceImpl implements VentanaService {
     @Override
     public VentanaDto cotizarYGuardarVentana(VentanaDto ventanaDto) {
         if(ventanaDto.getVentanaId() == null){
+            validarDatos(ventanaDto);
             calcularValorVentana(ventanaDto);
-            return ventanaMapper.toDto(ventanaRepository.save(ventanaMapper.toEntity(ventanaDto)));
+            Ventana guardada = ventanaRepository.saveAndFlush(ventanaMapper.toEntity(ventanaDto));
+            if (ventanaDto.getCotizacionId() != null) cotizacionService.recalcularTotales(ventanaDto.getCotizacionId());
+            return ventanaMapper.toDto(guardada);
         }
         if(ventanaRepository.existsById(ventanaDto.getVentanaId())){
             throw new ResponseStatusException(HttpStatus.CONFLICT);
@@ -54,22 +60,31 @@ public class VentanaServiceImpl implements VentanaService {
     // Calcula el precio neto de la ventana sin guardarla.
     @Override
     public VentanaDto cotizarVentana(VentanaDto ventanaDto) {
-        // Es público (lo usa el cliente sin cuenta): datos incompletos son un error del que llama, no del servidor.
-        if (ventanaDto.getPauta() == null || ventanaDto.getColor() == null || ventanaDto.getColor().getValor() == null
-                || ventanaDto.getVidrio() == null || ventanaDto.getAncho() <= 0 || ventanaDto.getAlto() <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Faltan la pauta, el color, el vidrio o las medidas.");
-        }
+        validarDatos(ventanaDto);
         calcularValorVentana(ventanaDto);
         return ventanaDto;
     }
 
+    @Transactional
     @Override
     public boolean eliminarVentana(Long id){
-        if (ventanaRepository.existsById(id)) {
-            ventanaRepository.deleteById(id);
+        Ventana ventana = ventanaRepository.findById(id).orElse(null);
+        if (ventana != null) {
+            Long cotizacionId = ventana.getCotizacion() == null ? null : ventana.getCotizacion().getCotizacionId();
+            ventanaRepository.delete(ventana);
+            ventanaRepository.flush();
+            if (cotizacionId != null) cotizacionService.recalcularTotales(cotizacionId);
             return true;
         } else {
             return false;
+        }
+    }
+
+    // Datos incompletos son un error del que llama (400), no del servidor.
+    private static void validarDatos(VentanaDto ventanaDto) {
+        if (ventanaDto.getPauta() == null || ventanaDto.getColor() == null || ventanaDto.getColor().getValor() == null
+                || ventanaDto.getVidrio() == null || ventanaDto.getAncho() <= 0 || ventanaDto.getAlto() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Faltan la pauta, el color, el vidrio o las medidas.");
         }
     }
 
