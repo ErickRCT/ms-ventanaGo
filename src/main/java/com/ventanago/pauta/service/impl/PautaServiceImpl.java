@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -97,10 +98,60 @@ public class PautaServiceImpl implements PautaService {
     @Transactional
     @Override
     public PautaDto modificarPauta(PautaDto pautaDto){
-        if (pautaRepository.existsById(pautaDto.getPautaId())){
-            return pautaMapper.toDto(pautaRepository.save(pautaMapper.toEntity(pautaDto)));
+        if (pautaDto.getPautaId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Falta el id de la pauta.");
         }
-        throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        Pauta pauta = pautaRepository.findById(pautaDto.getPautaId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+
+        Pauta datos = pautaMapper.toBasicEmpty(pautaDto);
+        pauta.setNombre(datos.getNombre());
+        pauta.setDescripcion(datos.getDescripcion());
+        pauta.setPesoTeoricoHorizontal(datos.getPesoTeoricoHorizontal());
+        pauta.setPesoTeoricoVertical(datos.getPesoTeoricoVertical());
+        pauta.setPesoTeoricoReforzadoHorizontal(datos.getPesoTeoricoReforzadoHorizontal());
+        pauta.setPesoTeoricoReforzadoVertical(datos.getPesoTeoricoReforzadoVertical());
+        pauta.setVerticalReforzada(datos.getVerticalReforzada());
+        pauta.setHorizontalReforzada(datos.getHorizontalReforzada());
+        pauta.setIsReforzada(datos.getIsReforzada());
+        pauta.setTipoPauta(datos.getTipoPauta());
+        pauta.setSerie(datos.getSerie());
+
+        // Los detalles se reemplazan completos: los que ya no vienen se eliminan (orphanRemoval) y el resto se crea de nuevo.
+        if (pauta.getVidrios() == null) pauta.setVidrios(new HashSet<>());
+        pauta.getVidrios().clear();
+        if (pautaDto.getVidrios() != null) {
+            pautaDto.getVidrios().forEach(dto -> {
+                PautaVidrio pautaVidrio = pautaVidrioMapper.toEntity(dto);
+                pautaVidrio.setPautaVidrioId(null);
+                pautaVidrio.setPauta(pauta);
+                pauta.getVidrios().add(pautaVidrio);
+            });
+        }
+
+        if (pauta.getQuincallerias() == null) pauta.setQuincallerias(new HashSet<>());
+        pauta.getQuincallerias().clear();
+        if (pautaDto.getQuincallerias() != null) {
+            pautaDto.getQuincallerias().forEach(dto -> {
+                PautaQuincalleria pautaQuincalleria = pautaQuincalleriaMapper.toEntity(dto);
+                pautaQuincalleria.setPautaQuincalleriaId(null);
+                pautaQuincalleria.setPauta(pauta);
+                pauta.getQuincallerias().add(pautaQuincalleria);
+            });
+        }
+
+        if (pauta.getPerfiles() == null) pauta.setPerfiles(new HashSet<>());
+        pauta.getPerfiles().clear();
+        if (pautaDto.getPerfiles() != null) {
+            pautaDto.getPerfiles().forEach(dto -> {
+                PautaPerfil pautaPerfil = pautaPerfilMapper.toEntity(dto);
+                pautaPerfil.setPautaPerfilId(null);
+                pautaPerfil.setPauta(pauta);
+                pauta.getPerfiles().add(pautaPerfil);
+            });
+        }
+
+        return pautaMapper.toDto(pautaRepository.save(pauta));
     }
 
     @Transactional

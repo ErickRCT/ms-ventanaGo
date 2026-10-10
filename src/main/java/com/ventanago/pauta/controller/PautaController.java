@@ -37,7 +37,7 @@ public class PautaController {
     }
 
     @PutMapping(value = "/modificar", consumes = "application/json", produces = "application/json")
-    public ResponseEntity<PautaDto> modificarPauta(PautaDto pautaDto){
+    public ResponseEntity<PautaDto> modificarPauta(@RequestBody PautaDto pautaDto){
         return ResponseEntity.ok(pautaService.modificarPauta(pautaDto));
     }
 
