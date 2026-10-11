@@ -5,6 +5,7 @@ import com.ventanago.auth.repository.entity.Cuenta;
 import com.ventanago.auth.repository.entity.Rol;
 import com.ventanago.comuna.repository.ComunaRepository;
 import com.ventanago.comuna.repository.entity.Comuna;
+import com.ventanago.notificacion.service.AvisoCreado;
 import com.ventanago.proveedor.repository.entity.PerfilProveedor;
 import com.ventanago.proveedor.service.ProveedorService;
 import com.ventanago.proveedor.service.dto.ProveedorDtos.ProveedorResumenDto;
@@ -14,6 +15,7 @@ import com.ventanago.solicitud.repository.entity.Solicitud.Estado;
 import com.ventanago.solicitud.repository.entity.Solicitud.Servicio;
 import com.ventanago.solicitud.service.dto.SolicitudDtos.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,6 +61,7 @@ public class SolicitudService {
     private final MensajeOfertaRepository mensajeRepository;
     private final ComunaRepository comunaRepository;
     private final ProveedorService proveedorService;
+    private final ApplicationEventPublisher eventos;
 
     /** Quién pide los datos: decide qué ofertas y qué datos de contacto ve. */
     private record Vista(Long cuentaId, Rol rol) {
@@ -471,6 +474,8 @@ public class SolicitudService {
         aviso.setTitulo(titulo.length() > 255 ? titulo.substring(0, 255) : titulo);
         aviso.setMensaje(mensaje);
         avisoRepository.save(aviso);
+        // También llega como notificación push al teléfono (PushService), una vez confirmada la transacción.
+        eventos.publishEvent(new AvisoCreado(Aviso.cuentaDe(destinatario), numero, aviso.getTitulo(), mensaje));
     }
 
     // ---------- Quién ve qué ----------

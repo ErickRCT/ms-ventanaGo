@@ -68,6 +68,8 @@ public class SeguridadConfig {
                         .requestMatchers(HttpMethod.GET, "/solicitudes", "/solicitudes/*/fotos/*").authenticated()
                         .requestMatchers("/ofertas/*/mensajes").authenticated()
                         .requestMatchers("/avisos", "/avisos/**").authenticated()
+                        // Teléfonos que reciben las notificaciones push de la cuenta.
+                        .requestMatchers(HttpMethod.POST, "/dispositivos", "/dispositivos/quitar").authenticated()
                         .anyRequest().hasRole("ADMIN"))
                 .oauth2ResourceServer(o -> o.jwt(jwt -> jwt.jwtAuthenticationConverter(convertidorRoles())));
         return http.build();

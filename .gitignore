@@ -35,3 +35,6 @@ build/
 ### Credenciales locales ###
 src/main/resources/application-local.properties
 .env
+
+### Clave de la cuenta de servicio de Firebase (va en la variable FIREBASE_CREDENCIALES) ###
+*firebase-adminsdk*.json

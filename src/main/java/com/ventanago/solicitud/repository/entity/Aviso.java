@@ -20,6 +20,16 @@ public class Aviso {
         return "CUENTA:" + cuentaId;
     }
 
+    /** Cuenta de un destinatario "CUENTA:<id>"; null para los demás. */
+    public static Long cuentaDe(String destinatario) {
+        if (destinatario == null || !destinatario.startsWith("CUENTA:")) return null;
+        try {
+            return Long.valueOf(destinatario.substring("CUENTA:".length()));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "aviso_id")
