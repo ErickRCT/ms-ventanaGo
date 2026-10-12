@@ -61,6 +61,9 @@ public class SeguridadConfig {
                         // Ofertar: proveedores y administrador.
                         .requestMatchers(HttpMethod.POST, "/solicitudes/*/respuesta").hasAnyRole("PROVEEDOR", "ADMIN")
                         .requestMatchers("/proveedor/perfil").hasRole("PROVEEDOR")
+                        // El resto del catálogo (con costos): la empresa lo consulta desde su perfil, sin editarlo.
+                        .requestMatchers(HttpMethod.GET, "/perfil", "/perfil/**", "/tipo-perfil", "/tipo-perfil/**",
+                                "/quincalleria", "/quincalleria/**").hasAnyRole("PROVEEDOR", "ADMIN")
                         // Elegir oferta, cancelar y valorar: el cliente dueño (se revisa en el servicio).
                         .requestMatchers(HttpMethod.POST, "/solicitudes/*/ofertas/*/elegir", "/solicitudes/*/cancelar", "/solicitudes/*/valoracion")
                         .hasAnyRole("CLIENTE", "ADMIN")
