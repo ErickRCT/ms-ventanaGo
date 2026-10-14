@@ -40,6 +40,8 @@ public class SeguridadConfig {
             "/color", "/color/**", "/vidrio", "/vidrio/**", "/region", "/region/**", "/comuna", "/comuna/**",
             // Proveedores de cada zona (ficha y valoraciones) y rango de precios: se ven antes de crear la cuenta.
             "/proveedores", "/proveedores/*", "/precios/referencia",
+            // Ilustraciones de las pautas (static/pautas, generadas con herramientas/imagenes-pautas).
+            "/pautas/**",
     };
 
     @Bean
